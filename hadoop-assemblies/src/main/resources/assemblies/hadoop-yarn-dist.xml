@@ -224,6 +224,16 @@
   <moduleSets>
     <moduleSet>
       <includes>
+        <include>org.apache.hadoop:hadoop-yarn-opera-extensions</include>
+      </includes>
+      <binaries>
+        <outputDirectory>share/hadoop/${hadoop.component}/lib</outputDirectory>
+        <includeDependencies>false</includeDependencies>
+        <unpack>false</unpack>
+      </binaries>
+    </moduleSet>
+    <moduleSet>
+      <includes>
         <include>org.apache.hadoop:hadoop-yarn-server-timelineservice</include>
         <include>org.apache.hadoop:hadoop-yarn-server-timelineservice-hbase-client</include>
         <include>org.apache.hadoop:hadoop-yarn-server-timelineservice-hbase-common</include>

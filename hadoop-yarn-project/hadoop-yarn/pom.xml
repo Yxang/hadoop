@@ -244,5 +244,7 @@
     <module>hadoop-yarn-client</module>
     <module>hadoop-yarn-registry</module>
     <module>hadoop-yarn-ui</module>
+    <!-- Opera-specific extensions built after core YARN modules but before parent assembly -->
+    <module>hadoop-yarn-opera-extensions</module>
   </modules>
 </project>
