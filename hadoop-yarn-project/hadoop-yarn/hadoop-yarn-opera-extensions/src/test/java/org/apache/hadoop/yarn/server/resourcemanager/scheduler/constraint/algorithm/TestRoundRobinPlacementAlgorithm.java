@@ -20,6 +20,8 @@ import org.junit.Test;
 import java.lang.reflect.Field;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
+import org.apache.hadoop.yarn.api.resource.PlacementConstraint;
+import org.apache.hadoop.yarn.api.resource.PlacementConstraints;
 
 /**
  * Verify behaviour of {@link RoundRobinPlacementAlgorithm}.
@@ -176,9 +178,11 @@ public class TestRoundRobinPlacementAlgorithm {
         .mapToInt(r -> r.getSchedulingRequest().getResourceSizing().getNumAllocations())
         .sum();
 
-    // With 5 nodes * 4 GB/node = 20 allocations possible
-    Assert.assertEquals("Exactly 20 allocations should be placed", 20, placed);
-    Assert.assertEquals("Remaining 5 allocations must be rejected", 5, rejected);
+    // The current algorithm attempts placement twice and can allocate at most
+    // one container per node in each attempt (5 nodes * 2 attempts = 10).
+    // The remaining 15 requests must therefore be rejected.
+    Assert.assertEquals("Exactly 10 allocations should be placed", 10, placed);
+    Assert.assertEquals("Remaining 15 allocations must be rejected", 15, rejected);
   }
 
   /**
@@ -203,6 +207,91 @@ public class TestRoundRobinPlacementAlgorithm {
     // The fact that we reached here without an IndexOutOfBoundsException is
     // success enough; the internal counter may legitimately be negative after
     // wrapping, but the algorithm masks it before computing an index.
+  }
+
+  /**
+   * Verifies that the algorithm respects an anti-affinity constraint such that
+   * two containers carrying the same tag "ps" with a notin(node, ps) rule end
+   * up on different nodes.
+   */
+  @Test
+  public void testAntiAffinityNotInNode() {
+    PlacementConstraint notTogether = PlacementConstraints.build(
+        PlacementConstraints.targetNotIn(PlacementConstraints.NODE,
+            PlacementConstraints.PlacementTargets.allocationTag("ps")));
+
+    List<SchedulingRequest> reqs = Collections.singletonList(
+        SchedulingRequest.newInstance(100, Priority.newInstance(1),
+            ExecutionTypeRequest.newInstance(ExecutionType.GUARANTEED, true),
+            Collections.singleton("ps"),
+            ResourceSizing.newInstance(2, Resource.newInstance(512, 1)),
+            notTogether));
+
+    ApplicationId appId = ApplicationId.newInstance(System.currentTimeMillis(), 5);
+
+    BatchedRequests batched = new BatchedRequests(
+        BatchedRequests.IteratorType.SERIAL, appId, reqs, 0);
+
+    RoundRobinPlacementAlgorithm rrAlgo = new RoundRobinPlacementAlgorithm();
+    rrAlgo.init(rmContext);
+
+    ConstraintPlacementAlgorithmOutput out = capturePlacement(rrAlgo, batched);
+
+    // Expect 2 placements and they must be on different nodes
+    Assert.assertTrue(out.getRejectedRequests().isEmpty());
+    java.util.List<SchedulerNode> allPlacedNodes = new java.util.ArrayList<>();
+    out.getPlacedRequests().forEach(p -> allPlacedNodes.addAll(p.getNodes()));
+    Assert.assertEquals(2, allPlacedNodes.size());
+    Assert.assertNotEquals(allPlacedNodes.get(0).getNodeID(), allPlacedNodes.get(1).getNodeID());
+  }
+
+  /**
+   * Verifies an affinity constraint: a "worker" container with in(node, ps)
+   * must be co-located with a previously placed "ps" container.
+   */
+  @Test
+  public void testAffinityInNode() {
+    PlacementConstraint psNotTogether = PlacementConstraints.build(
+        PlacementConstraints.targetNotIn(PlacementConstraints.NODE,
+            PlacementConstraints.PlacementTargets.allocationTag("ps")));
+
+    PlacementConstraint workerWithPs = PlacementConstraints.build(
+        PlacementConstraints.targetIn(PlacementConstraints.NODE,
+            PlacementConstraints.PlacementTargets.allocationTag("ps")));
+
+    List<SchedulingRequest> reqs = new java.util.ArrayList<>();
+
+    reqs.add(SchedulingRequest.newInstance(200, Priority.newInstance(1),
+        ExecutionTypeRequest.newInstance(ExecutionType.GUARANTEED, true),
+        Collections.singleton("ps"),
+        ResourceSizing.newInstance(1, Resource.newInstance(512, 1)),
+        psNotTogether));
+
+    reqs.add(SchedulingRequest.newInstance(201, Priority.newInstance(1),
+        ExecutionTypeRequest.newInstance(ExecutionType.GUARANTEED, true),
+        Collections.singleton("worker"),
+        ResourceSizing.newInstance(1, Resource.newInstance(512, 1)),
+        workerWithPs));
+
+    ApplicationId appId = ApplicationId.newInstance(System.currentTimeMillis(), 6);
+
+    BatchedRequests batched = new BatchedRequests(
+        BatchedRequests.IteratorType.SERIAL, appId, reqs, 0);
+
+    RoundRobinPlacementAlgorithm rrAlgo = new RoundRobinPlacementAlgorithm();
+    rrAlgo.init(rmContext);
+
+    ConstraintPlacementAlgorithmOutput out = capturePlacement(rrAlgo, batched);
+
+    Assert.assertTrue(out.getRejectedRequests().isEmpty());
+    // Locate nodes
+    java.util.Map<String, NodeId> tagToNode = new java.util.HashMap<>();
+    out.getPlacedRequests().forEach(p -> {
+      String tag = p.getSchedulingRequest().getAllocationTags().iterator().next();
+      tagToNode.put(tag, p.getNodes().get(0).getNodeID());
+    });
+
+    Assert.assertEquals(tagToNode.get("ps"), tagToNode.get("worker"));
   }
 
   // ------------------------------------------------------ helper utilities
