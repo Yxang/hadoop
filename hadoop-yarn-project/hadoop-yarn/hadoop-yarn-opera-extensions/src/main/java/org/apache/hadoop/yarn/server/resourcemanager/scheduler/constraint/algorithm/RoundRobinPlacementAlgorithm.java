@@ -64,7 +64,8 @@ public class RoundRobinPlacementAlgorithm implements ConstraintPlacementAlgorith
       collector.collect(resp);
       return;
     }
-    int startIdx = Math.abs(NEXT_START_INDEX.getAndIncrement()) % allNodes.size();
+    // Use unsigned semantics to avoid negative values when the counter wraps
+    int startIdx = (NEXT_START_INDEX.getAndIncrement() & Integer.MAX_VALUE) % allNodes.size();
     Collections.rotate(allNodes, -startIdx);
 
     List<SchedulingRequest> rejectedRequests = new ArrayList<>();
@@ -90,9 +91,6 @@ public class RoundRobinPlacementAlgorithm implements ConstraintPlacementAlgorith
     try {
       tagsManager.cleanTempContainers(requests.getApplicationId());
     } catch (NullPointerException npe) {
-      // This happens when no temporary tags were recorded for the application
-      // during the placement cycle. Swallow the exception because there is
-      // nothing to clean up in that case.
       if (LOG.isDebugEnabled()) {
         LOG.debug("No temporary tags to clean for app {}", requests.getApplicationId());
       }
@@ -124,7 +122,8 @@ public class RoundRobinPlacementAlgorithm implements ConstraintPlacementAlgorith
         try {
           if (attemptPlacementOnNode(requests.getApplicationId(), unalloc, req, node, false)) {
             req.getResourceSizing().setNumAllocations(--allocs);
-            Resources.addTo(unalloc, req.getResourceSizing().getResources());
+            // Decrease the amount of available resources after placing the container
+            Resources.subtractFrom(unalloc, req.getResourceSizing().getResources());
             placed.getNodes().add(node);
             tagsManager.addTempTags(node.getNodeID(), requests.getApplicationId(), req.getAllocationTags());
             checked = 0; // reset scan for next allocation
@@ -150,10 +149,12 @@ public class RoundRobinPlacementAlgorithm implements ConstraintPlacementAlgorith
         try {
           tagsManager.removeTempTags(node.getNodeID(), appId, pReq.getSchedulingRequest().getAllocationTags());
           Resource availOnNode = avail.get(node.getNodeID());
+          // Re-validate constraints only; resource was already accounted for
           if (!attemptPlacementOnNode(appId, availOnNode, pReq.getSchedulingRequest(), node, true)) {
             nodeIter.remove();
             num++;
-            Resources.subtractFrom(availOnNode, pReq.getSchedulingRequest().getResourceSizing().getResources());
+            // Release resources on the node since this placement is being reverted
+            Resources.addTo(availOnNode, pReq.getSchedulingRequest().getResourceSizing().getResources());
           } else {
             tagsManager.addTempTags(node.getNodeID(), appId, pReq.getSchedulingRequest().getAllocationTags());
           }

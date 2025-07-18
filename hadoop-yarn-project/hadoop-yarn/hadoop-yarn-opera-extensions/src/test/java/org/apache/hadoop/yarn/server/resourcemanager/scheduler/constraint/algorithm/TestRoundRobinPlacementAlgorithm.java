@@ -27,7 +27,8 @@ import java.util.stream.Collectors;
 public class TestRoundRobinPlacementAlgorithm {
 
   private static final int NUM_NODES = 5;
-  private static final Resource NODE_CAP = Resource.newInstance(8192, 8);
+  // Use 4 GB per node so the capacity-exhaustion test has a tight bound.
+  private static final Resource NODE_CAP = Resource.newInstance(4096, 4);
   private List<SchedulerNode> schedulerNodes;
   private AbstractYarnScheduler schedulerMock;
   private RMContext rmContext;
@@ -142,6 +143,66 @@ public class TestRoundRobinPlacementAlgorithm {
         .collect(Collectors.toSet());
 
     Assert.assertEquals("Every scheduler node should be utilised at least once", NUM_NODES, nodesUsed.size());
+  }
+
+  /**
+   * Regression test for HDFS-XXXX: ensure the algorithm never allocates more
+   * resources than a node can actually host. We create 5 nodes with 4 GB each
+   * (20 GB total) but ask for 25 allocations of 1 GB – five of them must be
+   * rejected because the cluster cannot satisfy them.
+   */
+  @Test
+  public void testRoundRobinHonoursNodeCapacity() {
+    final int allocsRequested = 25;   // > total cluster capacity (20)
+    final int allocMem = 1024;        // 1 GB per allocation
+
+    List<SchedulingRequest> reqs = Collections.singletonList(
+        schedulingRequest(42, allocsRequested, allocMem, "baz"));
+
+    ApplicationId appId = ApplicationId.newInstance(System.currentTimeMillis(), 4);
+
+    BatchedRequests batched = new BatchedRequests(
+        BatchedRequests.IteratorType.SERIAL, appId, reqs, 0);
+
+    RoundRobinPlacementAlgorithm rrAlgo = new RoundRobinPlacementAlgorithm();
+    rrAlgo.init(rmContext);
+
+    ConstraintPlacementAlgorithmOutput out = capturePlacement(rrAlgo, batched);
+
+    int placed = out.getPlacedRequests().stream()
+        .mapToInt(p -> p.getNodes().size()).sum();
+
+    int rejected = out.getRejectedRequests().stream()
+        .mapToInt(r -> r.getSchedulingRequest().getResourceSizing().getNumAllocations())
+        .sum();
+
+    // With 5 nodes * 4 GB/node = 20 allocations possible
+    Assert.assertEquals("Exactly 20 allocations should be placed", 20, placed);
+    Assert.assertEquals("Remaining 5 allocations must be rejected", 5, rejected);
+  }
+
+  /**
+   * Ensure the round-robin counter never causes negative indices when it
+   * overflows (Integer.MIN_VALUE edge case).
+   */
+  @Test
+  public void testStartIndexOverflowDoesNotCrash() throws Exception {
+    // Force NEXT_START_INDEX close to overflow
+    Field f = RoundRobinPlacementAlgorithm.class.getDeclaredField("NEXT_START_INDEX");
+    f.setAccessible(true);
+    AtomicInteger ai = (AtomicInteger) f.get(null);
+    ai.set(Integer.MAX_VALUE - 1);
+
+    RoundRobinPlacementAlgorithm rrAlgo = new RoundRobinPlacementAlgorithm();
+    rrAlgo.init(rmContext);
+
+    // Two invocations will wrap the counter
+    invokeAlgorithm(rrAlgo);
+    invokeAlgorithm(rrAlgo);
+
+    // The fact that we reached here without an IndexOutOfBoundsException is
+    // success enough; the internal counter may legitimately be negative after
+    // wrapping, but the algorithm masks it before computing an index.
   }
 
   // ------------------------------------------------------ helper utilities
