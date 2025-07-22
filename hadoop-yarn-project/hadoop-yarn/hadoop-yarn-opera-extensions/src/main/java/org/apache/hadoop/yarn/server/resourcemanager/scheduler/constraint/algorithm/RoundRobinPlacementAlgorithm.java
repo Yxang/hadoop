@@ -45,6 +45,28 @@ public class RoundRobinPlacementAlgorithm implements ConstraintPlacementAlgorith
   private NodeCandidateSelector nodeSelector;
   private ResourceCalculator resourceCalculator;
 
+  private static int gcd(int a, int b) {
+    while (b != 0) {
+        int tmp = b;
+        b = a % b;
+        a = tmp;
+    }
+    return a;
+  }
+
+  private static int smallestCoprime(int n) {
+    for (int i = 2; ; i++) {
+        if (gcd(i, n) == 1) {
+            return i;
+        }
+    }
+  }
+
+  private int getAndUpdateNextStartIndex(int allNodeSize) {
+    int n = smallestCoprime(allNodeSize);
+    return NEXT_START_INDEX.addAndGet(n);
+  }
+
   @Override
   public void init(RMContext rmContext) {
     this.tagsManager = new LocalAllocationTagsManager(
@@ -80,7 +102,7 @@ public class RoundRobinPlacementAlgorithm implements ConstraintPlacementAlgorith
         new ConstraintPlacementAlgorithmOutput(requests.getApplicationId());
     List<SchedulerNode> allNodes = nodeSelector.selectNodes(null);
 
-    int startIdx = (NEXT_START_INDEX.getAndIncrement() & Integer.MAX_VALUE) % allNodes.size();
+    int startIdx = getAndUpdateNextStartIndex(allNodes.size()) % allNodes.size();
     Collections.rotate(allNodes, -startIdx);
 
     List<SchedulingRequest> rejectedRequests = new ArrayList<>();
