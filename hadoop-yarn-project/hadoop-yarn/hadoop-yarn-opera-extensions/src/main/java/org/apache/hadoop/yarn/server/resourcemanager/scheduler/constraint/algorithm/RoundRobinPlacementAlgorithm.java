@@ -132,7 +132,7 @@ public class RoundRobinPlacementAlgorithm implements ConstraintPlacementAlgorith
     try{
       this.tagsManager.cleanTempContainers(requests.getApplicationId());
     } catch (NullPointerException e) {
-      LOG.warn("Got exception from TagManager !", e);
+      // do nothing, may not have put any temp tags
     }
   }
 
